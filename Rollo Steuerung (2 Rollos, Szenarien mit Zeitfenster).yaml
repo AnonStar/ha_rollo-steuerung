@@ -1,0 +1,220 @@
+blueprint:
+  name: "Rollo Steuerung (2 Rollos, Szenarien mit Zeitfenster)"
+  description: >
+    Steuert zwei Rollos basierend auf Zeit, Temperatur und Sonnenlichtintensität.
+    Unterstützt die Aktionen Öffnen, Halbschließen und Schließen mit definierten Zeitfenstern.
+  domain: automation
+  input:
+    rollo_1:
+      name: "Rollo 1"
+      description: "Das erste Rollo, das gesteuert werden soll."
+      selector:
+        entity:
+          domain: cover
+
+    rollo_2:
+      name: "Rollo 2"
+      description: "Das zweite Rollo, das gesteuert werden soll."
+      selector:
+        entity:
+          domain: cover
+
+    bedroom_temp_sensor:
+      name: "Schlafzimmertemperatur Sensor"
+      description: "Der Temperatursensor im Schlafzimmer."
+      selector:
+        entity:
+          domain: sensor
+
+    outside_temp_sensor:
+      name: "Außentemperatur Sensor"
+      description: "Der Temperatursensor für die Außentemperatur."
+      selector:
+        entity:
+          domain: sensor
+
+    sunlight_sensor:
+      name: "Sonnenlicht Sensor"
+      description: "Der Sensor für die Sonnenlichtintensität."
+      selector:
+        entity:
+          domain: sensor
+
+    sunrise_offset:
+      name: "Sonnenaufgangszeit (Offset)"
+      description: "Zeitversatz (in Minuten) für den Sonnenaufgang."
+      default: 0
+      selector:
+        number:
+          min: -120
+          max: 120
+          step: 1
+          unit_of_measurement: "min"
+
+    sunset_offset:
+      name: "Sonnenuntergangszeit (Offset)"
+      description: "Zeitversatz (in Minuten) für den Sonnenuntergang."
+      default: 0
+      selector:
+        number:
+          min: -120
+          max: 120
+          step: 1
+          unit_of_measurement: "min"
+
+    earliest_morning_time:
+      name: "Früheste Öffnungszeit (Morgens)"
+      description: "Die früheste Uhrzeit, zu der die Rollos morgens geöffnet werden dürfen."
+      default: "07:30:00"
+      selector:
+        time:
+
+    latest_evening_time:
+      name: "Späteste Schließzeit (Abends)"
+      description: "Die späteste Uhrzeit, zu der die Rollos abends geschlossen werden dürfen."
+      default: "22:00:00"
+      selector:
+        time:
+
+trigger:
+  - platform: time_pattern
+    minutes: "/5" # Überprüft alle 5 Minuten die Bedingungen
+
+  - platform: numeric_state
+    entity_id: !input bedroom_temp_sensor
+
+  - platform: numeric_state
+    entity_id: !input outside_temp_sensor
+
+  - platform: numeric_state
+    entity_id: !input sunlight_sensor
+
+condition: []
+
+action:
+  - choose:
+      # Szenario 1: Rollos schließen ab Finsternis bis frühester Öffnungszeit (Schutz der Privatsphäre)
+      - conditions:
+          - condition: sun
+            before: sunrise
+            before_offset: !input sunrise_offset
+          - condition: time
+            before: !input earliest_morning_time
+        sequence:
+          - service: cover.set_cover_position
+            target:
+              entity_id:
+                - !input rollo_1
+                - !input rollo_2
+            data:
+              position: 100
+
+      # Szenario 2: Rollos öffnen ab frühester Öffnungszeit (Tageslichtnutzung)
+      - conditions:
+          - condition: time
+            after: !input earliest_morning_time
+          - condition: sun
+            after: sunrise
+            after_offset: !input sunrise_offset
+        sequence:
+          - service: cover.set_cover_position
+            target:
+              entity_id:
+                - !input rollo_1
+                - !input rollo_2
+            data:
+              position: 0
+
+      # Szenario 3: Rollos schließen bei >24°C Innen- und >28°C Außentemperatur
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input bedroom_temp_sensor
+            above: 24
+          - condition: numeric_state
+            entity_id: !input outside_temp_sensor
+            above: 28
+        sequence:
+          - service: cover.set_cover_position
+            target:
+              entity_id:
+                - !input rollo_1
+                - !input rollo_2
+            data:
+              position: 100
+
+      # Szenario 4: Rollos schließen bei >24°C Innen- und >50.000 Lux
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input bedroom_temp_sensor
+            above: 24
+          - condition: numeric_state
+            entity_id: !input sunlight_sensor
+            above: 50000
+        sequence:
+          - service: cover.set_cover_position
+            target:
+              entity_id:
+                - !input rollo_1
+                - !input rollo_2
+            data:
+              position: 100
+
+      # Szenario 5: Rollos teilweise schließen bei >50.000 Lux
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input sunlight_sensor
+            above: 50000
+          - condition: time
+            after: !input earliest_morning_time
+            before: sunset
+            before_offset: !input sunset_offset
+        sequence:
+          - service: cover.set_cover_position
+            target:
+              entity_id:
+                - !input rollo_1
+                - !input rollo_2
+            data:
+              position: 50
+
+      # Szenario 6: Rollos öffnen bei moderaten Temperaturen und wenig Licht (<24°C, <10.000 Lux)
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input bedroom_temp_sensor
+            below: 24
+          - condition: numeric_state
+            entity_id: !input outside_temp_sensor
+            below: 24
+          - condition: numeric_state
+            entity_id: !input sunlight_sensor
+            below: 10000
+          - condition: time
+            after: !input earliest_morning_time
+            before: sunset
+            before_offset: !input sunset_offset
+        sequence:
+          - service: cover.set_cover_position
+            target:
+              entity_id:
+                - !input rollo_1
+                - !input rollo_2
+            data:
+              position: 0
+
+      # Szenario 7: Rollos schließen ab Sonnenuntergang bis spätester Schließzeit
+      - conditions:
+          - condition: sun
+            after: sunset
+            after_offset: !input sunset_offset
+          - condition: time
+            before: !input latest_evening_time
+        sequence:
+          - service: cover.set_cover_position
+            target:
+              entity_id:
+                - !input rollo_1
+                - !input rollo_2
+            data:
+              position: 100
+
+  default: []
